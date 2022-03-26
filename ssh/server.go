@@ -83,6 +83,7 @@ type ServerConfig struct {
 	// attempts to authenticate with auth method "none".
 	// NoClientAuth must also be set to true for this be used, or
 	// this func is unused.
+	// If the function returns ErrDenied, the connection is terminated.
 	NoClientAuthCallback func(ConnMetadata) (*Permissions, error)
 
 	// MaxAuthTries specifies the maximum number of authentication attempts
@@ -93,6 +94,7 @@ type ServerConfig struct {
 
 	// PasswordCallback, if non-nil, is called when a user
 	// attempts to authenticate using a password.
+	// If the function returns ErrDenied, the connection is terminated.
 	PasswordCallback func(conn ConnMetadata, password []byte) (*Permissions, error)
 
 	// PublicKeyCallback, if non-nil, is called when a client
@@ -103,6 +105,7 @@ type ServerConfig struct {
 	// offered is in fact used to authenticate. To record any data
 	// depending on the public key, store it inside a
 	// Permissions.Extensions entry.
+	// If the function returns ErrDenied, the connection is terminated.
 	PublicKeyCallback func(conn ConnMetadata, key PublicKey) (*Permissions, error)
 
 	// KeyboardInteractiveCallback, if non-nil, is called when
@@ -112,11 +115,20 @@ type ServerConfig struct {
 	// Challenge rounds. To avoid information leaks, the client
 	// should be presented a challenge even if the user is
 	// unknown.
+	// If the function returns ErrDenied, the connection is terminated.
 	KeyboardInteractiveCallback func(conn ConnMetadata, client KeyboardInteractiveChallenge) (*Permissions, error)
 
 	// AuthLogCallback, if non-nil, is called to log all authentication
 	// attempts.
 	AuthLogCallback func(conn ConnMetadata, method string, err error)
+
+	// NextAuthMethodCallback, if non-nil, is called whenever an authentication
+	// method fails. It's called after AuthLogCallback, if set. The return
+	// values are the SSH auth types (from
+	// https://www.iana.org/assignments/ssh-parameters/ssh-parameters.xhtml#ssh-parameters-10
+	// such as "password", "publickey", "keyboard-interactive", etc)
+	// to suggest that the client try next. If empty, authentication fails.
+	NextAuthMethodCallback func(conn ConnMetadata, prevErrors []error) []string
 
 	// ServerVersion is the version identification string to announce in
 	// the public handshake.
@@ -462,6 +474,20 @@ func (p *PartialSuccessError) Error() string {
 // It is returned in ServerAuthError.Errors from NewServerConn.
 var ErrNoAuth = errors.New("ssh: no auth passed yet")
 
+// ErrDenied can be returned from an authentication callback to inform the
+// client that access is denied and that no further attempt will be accepted
+// on the connection.
+var ErrDenied = errors.New("ssh: access denied")
+
+func (s *connection) SendAuthBanner(msg string) error {
+	if s.mux != nil {
+		return errors.New("ssh: SendAuthBanner called after handshake")
+	}
+	return s.transport.writePacket(Marshal(&userAuthBannerMsg{
+		Message: msg,
+	}))
+}
+
 // BannerError is an error that can be returned by authentication handlers in
 // ServerConfig to send a banner message to the client.
 type BannerError struct {
@@ -539,10 +565,7 @@ userAuthLoop:
 			displayedBanner = true
 			msg := config.BannerCallback(s)
 			if msg != "" {
-				bannerMsg := &userAuthBannerMsg{
-					Message: msg,
-				}
-				if err := s.transport.writePacket(Marshal(bannerMsg)); err != nil {
+				if err := s.SendAuthBanner(msg); err != nil {
 					return nil, err
 				}
 			}
@@ -767,6 +790,21 @@ userAuthLoop:
 		if authErr == nil {
 			break userAuthLoop
 		}
+		if errors.Is(authErr, ErrDenied) {
+			var failureMsg userAuthFailureMsg
+			if config.NextAuthMethodCallback != nil {
+				// We also call the NextAuthMethodCallback here, even though
+				// we're hanging up by returning out of this func, as OpenSSH
+				// will render this last one in parentheses in the rejection
+				// error message which is a nice little place to put the product
+				// name, auth type, or a hint about why it might've failed.
+				failureMsg.Methods = config.NextAuthMethodCallback(s, authErrs)
+			}
+			if err := s.transport.writePacket(Marshal(failureMsg)); err != nil {
+				return nil, err
+			}
+			return nil, authErr
+		}
 
 		var failureMsg userAuthFailureMsg
 
@@ -816,18 +854,22 @@ userAuthLoop:
 			}
 		}
 
-		if authConfig.PasswordCallback != nil {
-			failureMsg.Methods = append(failureMsg.Methods, "password")
-		}
-		if authConfig.PublicKeyCallback != nil {
-			failureMsg.Methods = append(failureMsg.Methods, "publickey")
-		}
-		if authConfig.KeyboardInteractiveCallback != nil {
-			failureMsg.Methods = append(failureMsg.Methods, "keyboard-interactive")
-		}
-		if authConfig.GSSAPIWithMICConfig != nil && authConfig.GSSAPIWithMICConfig.Server != nil &&
-			authConfig.GSSAPIWithMICConfig.AllowLogin != nil {
-			failureMsg.Methods = append(failureMsg.Methods, "gssapi-with-mic")
+		if config.NextAuthMethodCallback != nil {
+			failureMsg.Methods = config.NextAuthMethodCallback(s, authErrs)
+		} else {
+			if authConfig.PasswordCallback != nil {
+				failureMsg.Methods = append(failureMsg.Methods, "password")
+			}
+			if authConfig.PublicKeyCallback != nil {
+				failureMsg.Methods = append(failureMsg.Methods, "publickey")
+			}
+			if authConfig.KeyboardInteractiveCallback != nil {
+				failureMsg.Methods = append(failureMsg.Methods, "keyboard-interactive")
+			}
+			if authConfig.GSSAPIWithMICConfig != nil && authConfig.GSSAPIWithMICConfig.Server != nil &&
+				authConfig.GSSAPIWithMICConfig.AllowLogin != nil {
+				failureMsg.Methods = append(failureMsg.Methods, "gssapi-with-mic")
+			}
 		}
 
 		if len(failureMsg.Methods) == 0 {

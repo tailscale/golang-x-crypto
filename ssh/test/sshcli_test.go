@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"testing"
 
-	"golang.org/x/crypto/internal/testenv"
+	"github.com/tailscale/golang-x-crypto/internal/testenv"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/testdata"
 )
