@@ -1,4 +1,4 @@
-module golang.org/x/crypto
+module github.com/tailscale/golang-x-crypto
 
 go 1.17
 
@@ -8,4 +8,7 @@ require (
 	golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1
 )
 
-require golang.org/x/text v0.3.6 // indirect
+require (
+	golang.org/x/crypto v0.0.0-20220321153916-2c7772ba3064 // indirect
+	golang.org/x/text v0.3.6 // indirect
+)
