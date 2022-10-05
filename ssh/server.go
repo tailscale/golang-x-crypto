@@ -66,11 +66,11 @@ type ServerConfig struct {
 
 	hostKeys []Signer
 
-	// ImplictAuthMethod is sent to the client in the list of acceptable
+	// ImplicitAuthMethod is sent to the client in the list of acceptable
 	// authentication methods. To make an authentication decision based on
 	// connection metadata use NoClientAuthCallback. If NoClientAuthCallback is
 	// nil, the value is unused.
-	ImplictAuthMethod string
+	ImplicitAuthMethod string
 
 	// NoClientAuth is true if clients are allowed to connect without
 	// authenticating.
@@ -690,8 +690,8 @@ userAuthLoop:
 		}
 		if errors.Is(authErr, ErrDenied) {
 			var failureMsg userAuthFailureMsg
-			if config.ImplictAuthMethod != "" {
-				failureMsg.Methods = []string{config.ImplictAuthMethod}
+			if config.ImplicitAuthMethod != "" {
+				failureMsg.Methods = []string{config.ImplicitAuthMethod}
 			}
 			if err := s.transport.writePacket(Marshal(failureMsg)); err != nil {
 				return nil, err
@@ -727,8 +727,8 @@ userAuthLoop:
 		}
 
 		var failureMsg userAuthFailureMsg
-		if config.NoClientAuthCallback != nil && config.ImplictAuthMethod != "" {
-			failureMsg.Methods = append(failureMsg.Methods, config.ImplictAuthMethod)
+		if config.NoClientAuthCallback != nil && config.ImplicitAuthMethod != "" {
+			failureMsg.Methods = append(failureMsg.Methods, config.ImplicitAuthMethod)
 		}
 		if config.PasswordCallback != nil {
 			failureMsg.Methods = append(failureMsg.Methods, "password")
