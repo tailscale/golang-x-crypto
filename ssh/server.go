@@ -310,19 +310,6 @@ func isAcceptableAlgo(algo string) bool {
 	return false
 }
 
-// WithBannerError is an error wrapper type that can be returned from an authentication
-// function to additionally write out a banner error message.
-type WithBannerError struct {
-	Err     error
-	Message string
-}
-
-func (e WithBannerError) Unwrap() error {
-	return e.Err
-}
-
-func (e WithBannerError) Error() string { return e.Err.Error() }
-
 func checkSourceAddress(addr net.Addr, sourceAddrs string) error {
 	if addr == nil {
 		return errors.New("ssh: no address known for client, but source-address match required")
@@ -453,6 +440,15 @@ var (
 	ErrNoAuth = errors.New("ssh: no auth passed yet")
 )
 
+func (s *connection) SendAuthBanner(msg string) error {
+	if s.mux != nil {
+		return errors.New("ssh: SendAuthBanner called after handshake")
+	}
+	return s.transport.writePacket(Marshal(&userAuthBannerMsg{
+		Message: msg,
+	}))
+}
+
 func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, error) {
 	sessionID := s.transport.getSessionID()
 	var cache pubKeyCache
@@ -460,7 +456,6 @@ func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, err
 
 	authFailures := 0
 	var authErrs []error
-	var displayedBanner bool
 
 userAuthLoop:
 	for {
@@ -493,14 +488,10 @@ userAuthLoop:
 
 		s.user = userAuthReq.User
 
-		if !displayedBanner && config.BannerCallback != nil {
-			displayedBanner = true
+		if config.BannerCallback != nil {
 			msg := config.BannerCallback(s)
 			if msg != "" {
-				bannerMsg := &userAuthBannerMsg{
-					Message: msg,
-				}
-				if err := s.transport.writePacket(Marshal(bannerMsg)); err != nil {
+				if err := s.SendAuthBanner(msg); err != nil {
 					return nil, err
 				}
 			}
@@ -698,14 +689,6 @@ userAuthLoop:
 
 		if authErr == nil {
 			break userAuthLoop
-		}
-
-		var w WithBannerError
-		if errors.As(authErr, &w) && w.Message != "" {
-			bannerMsg := &userAuthBannerMsg{Message: w.Message}
-			if err := s.transport.writePacket(Marshal(bannerMsg)); err != nil {
-				return nil, err
-			}
 		}
 		if errors.Is(authErr, ErrDenied) {
 			var failureMsg userAuthFailureMsg
