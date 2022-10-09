@@ -41,6 +41,11 @@ type ConnMetadata interface {
 
 	// LocalAddr returns the local address for this connection.
 	LocalAddr() net.Addr
+
+	// SendAuthBanner sends a banner to the client. This is useful
+	// for sending message during auth. It is only valid to call this
+	// during the auth phase.
+	SendAuthBanner(banner string) error
 }
 
 // Conn represents an SSH connection for both server and client roles.
