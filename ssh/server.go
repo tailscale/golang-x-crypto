@@ -439,6 +439,7 @@ func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, err
 
 	authFailures := 0
 	var authErrs []error
+	var displayedBanner bool
 
 userAuthLoop:
 	for {
@@ -471,7 +472,8 @@ userAuthLoop:
 
 		s.user = userAuthReq.User
 
-		if config.BannerCallback != nil {
+		if !displayedBanner && config.BannerCallback != nil {
+			displayedBanner = true
 			msg := config.BannerCallback(s)
 			if msg != "" {
 				if err := s.SendAuthBanner(msg); err != nil {
