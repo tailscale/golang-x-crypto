@@ -15,11 +15,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -34,6 +36,17 @@ func newTestClient() *Client {
 	return &Client{
 		Key: testKeyEC,
 		dir: &Directory{}, // skip discovery
+	}
+}
+
+// newTestClientWithMockDirectory creates a client with a non-nil Directory
+// that contains mock field values.
+func newTestClientWithMockDirectory() *Client {
+	return &Client{
+		Key: testKeyEC,
+		dir: &Directory{
+			RenewalInfoURL: "https://example.com/acme/renewal-info/",
+		},
 	}
 }
 
@@ -507,6 +520,133 @@ func TestFetchCertSize(t *testing.T) {
 	_, err := cl.FetchCert(context.Background(), ts.URL, false)
 	if err == nil {
 		t.Errorf("err is nil")
+	}
+}
+
+const (
+	issuerPEM = `-----BEGIN CERTIFICATE-----
+MIIE3DCCA0SgAwIBAgIRAPoe8bsoe0klnS+2X8jSXe0wDQYJKoZIhvcNAQELBQAw
+gYUxHjAcBgNVBAoTFW1rY2VydCBkZXZlbG9wbWVudCBDQTEtMCsGA1UECwwkY3Bh
+bG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMTQwMgYDVQQDDCtta2Nl
+cnQgY3BhbG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMB4XDTIzMDcx
+MjE4MjIxNloXDTMzMDcxMjE4MjIxNlowgYUxHjAcBgNVBAoTFW1rY2VydCBkZXZl
+bG9wbWVudCBDQTEtMCsGA1UECwwkY3BhbG1lckBwdW1wa2luLmxvY2FsIChDaHJp
+cyBQYWxtZXIpMTQwMgYDVQQDDCtta2NlcnQgY3BhbG1lckBwdW1wa2luLmxvY2Fs
+IChDaHJpcyBQYWxtZXIpMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA
+vsqsjjsfOwfwHJO9/st4+bA5Y05puXzjiX+B586Zm3nneQpxTb35vTA7hUn5kT9h
++AlEfOvs1t17NNvQ0NjDXID5xSTfzBU/STAG4gKCGkzJPma++TWM+dlRaL7ZICvE
+qigVtbZeCZbu56j0kaZ9eYZyvS1itkTIhN/67qsh7j7BlDhLR1m7jQNz7QaNtLkJ
+8NJzKUVmpFHssLBBHkQSWpC7deJczcwZvBI7WbjJyz5xt+gw6sPvNtzGzu+jRmjD
+6GtQFbAcV7OTkUDIaxiiO8d5MPqYFTTntPH0Tj/JwEmbUteICYe7aH7Oq/aYWD2I
+407ymNjOh1YVHZuOaZVMgw2bhzLWnQYQtO2fTxQud+ppd7T4RFvirYD4Nv/TGjtx
+M3YidhioHgd1i41BfSaq+g/QjBljJRygWJo+HX4xRHS3FZvMLtC2/drxVETZyWYj
+YVOK+BTteZf5xOSlVqSZ0I1lF0GEiglPrz7ki0zcOL5H8J4V+kKSE+3oIhM/dvG1
+AgMBAAGjRTBDMA4GA1UdDwEB/wQEAwICBDASBgNVHRMBAf8ECDAGAQH/AgEAMB0G
+A1UdDgQWBBT6S+ENDu2e76E5I59q6xQrH7PE2zANBgkqhkiG9w0BAQsFAAOCAYEA
+dZJMBDtrgdTnV4r4XxPwjShFcGxnEHVRbKOixw6euVvfHutCyKljlwQAwKhTJ9iM
+ua48h72jlWtgAXDLDXCV7SSYilGhBGECEubxxDGE/b9TBxHediopxQp9wogeUhmV
+9BXw0ppJbH1CLmL5bfTR7cJZVz6M8XuqSzTayxuUImcoUNO7dNV0Q5igWRb8vUUK
+ITX9tA54qOF3ENQLmeouDdtdJJLI2ExUoqO8XEKwMFg+Pj4AVu2kyzziCCela2ji
+TUNcLW0ri2wwY8cc+IsF40tUjcMKlHp1NHVlawgP4wKW7YlEOweGLUFFKTxvTlSZ
+gQDZANpuJL7Wqrmu8edffCOnMVxGrSLm6HuVc/RembdguWOPgKb8QImpJQcYv+RD
+1KZpqFsCEAED46v7Ea5jrSsyJ/ZysvMC8RfYS55wMTwfaZyVldFW9U3ElzoaWsei
+ip2IXMXY/9RjRwc4RGEJcMyIGKXRUat9blzBtv/pNv1uChG2GDCbhltCyz3v5Tn/
+-----END CERTIFICATE-----`
+	leafPEM = `-----BEGIN CERTIFICATE-----
+MIIEizCCAvOgAwIBAgIRAITApw7R8HSs7GU7cj8dEyUwDQYJKoZIhvcNAQELBQAw
+gYUxHjAcBgNVBAoTFW1rY2VydCBkZXZlbG9wbWVudCBDQTEtMCsGA1UECwwkY3Bh
+bG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMTQwMgYDVQQDDCtta2Nl
+cnQgY3BhbG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMB4XDTIzMDcx
+MjE4MjIxNloXDTI1MTAxMjE4MjIxNlowWDEnMCUGA1UEChMebWtjZXJ0IGRldmVs
+b3BtZW50IGNlcnRpZmljYXRlMS0wKwYDVQQLDCRjcGFsbWVyQHB1bXBraW4ubG9j
+YWwgKENocmlzIFBhbG1lcikwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
+AQDNDO8P4MI9jaqVcPtF8C4GgHnTP5EK3U9fgyGApKGxTpicMQkA6z4GXwUP/Fvq
+7RuCU9Wg7By5VetKIHF7FxkxWkUMrssr7mV8v6mRCh/a5GqDs14aj5ucjLQAJV74
+tLAdrCiijQ1fkPWc82fob+LkfKWGCWw7Cxf6ZtEyC8jz/DnfQXUvOiZS729ndGF7
+FobKRfIoirD+GI2NTYIp3LAUFSPR6HXTe7HAg8J81VoUKli8z504+FebfMmHePm/
+zIfiI0njAj4czOlZD56/oLsV0WRUizFjafHHUFz1HVdfFw8Qf9IOOTydYOe8M5i0
+lVbVO5G+HP+JDn3cr9MT41B9AgMBAAGjgaEwgZ4wDgYDVR0PAQH/BAQDAgWgMBMG
+A1UdJQQMMAoGCCsGAQUFBwMBMB8GA1UdIwQYMBaAFPpL4Q0O7Z7voTkjn2rrFCsf
+s8TbMFYGA1UdEQRPME2CC2V4YW1wbGUuY29tgg0qLmV4YW1wbGUuY29tggxleGFt
+cGxlLnRlc3SCCWxvY2FsaG9zdIcEfwAAAYcQAAAAAAAAAAAAAAAAAAAAATANBgkq
+hkiG9w0BAQsFAAOCAYEAMlOb7lrHuSxwcnAu7mL1ysTGqKn1d2TyDJAN5W8YFY+4
+XLpofNkK2UzZ0t9LQRnuFUcjmfqmfplh5lpC7pKmtL4G5Qcdc+BczQWcopbxd728
+sht9BKRkH+Bo1I+1WayKKNXW+5bsMv4CH641zxaMBlzjEnPvwKkNaGLMH3x5lIeX
+GGgkKNXwVtINmyV+lTNVtu2IlHprxJGCjRfEuX7mEv6uRnqz3Wif+vgyh3MBgM/1
+dUOsTBNH4a6Jl/9VPSOfRdQOStqIlwTa/J1bhTvivsYt1+eWjLnsQJLgZQqwKvYH
+BJ30gAk1oNnuSkx9dHbx4mO+4mB9oIYUALXUYakb8JHTOnuMSj9qelVj5vjVxl9q
+KRitptU+kLYRA4HSgUXrhDIm4Q6D/w8/ascPqQ3HxPIDFLe+gTofEjqnnsnQB29L
+gWpI8l5/MtXAOMdW69eEovnADc2pgaiif0T+v9nNKBc5xfDZHnrnqIqVzQEwL5Qv
+niQI8IsWD5LcQ1Eg7kCq
+-----END CERTIFICATE-----`
+)
+
+func TestGetRenewalURL(t *testing.T) {
+	leaf, _ := pem.Decode([]byte(leafPEM))
+	issuer, _ := pem.Decode([]byte(issuerPEM))
+
+	parsedLeaf, err := x509.ParseCertificate(leaf.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedIssuer, err := x509.ParseCertificate(issuer.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := newTestClientWithMockDirectory()
+	urlString, err := client.getRenewalURL(parsedLeaf, parsedIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedURL, err := url.Parse(urlString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheme := parsedURL.Scheme; scheme == "" {
+		t.Fatalf("malformed URL scheme: %q from %q", scheme, urlString)
+	}
+	if host := parsedURL.Host; host == "" {
+		t.Fatalf("malformed URL host: %q from %q", host, urlString)
+	}
+	if parsedURL.RawQuery != "" {
+		t.Fatalf("malformed URL: should not have a query")
+	}
+	path := parsedURL.EscapedPath()
+	slash := strings.LastIndex(path, "/")
+	if slash == -1 {
+		t.Fatalf("malformed URL path: %q from %q", path, urlString)
+	}
+	certIDPart := path[slash+1:]
+	if certIDPart == "" {
+		t.Fatalf("missing certID part in URL path: %q from %q", path, urlString)
+	}
+}
+
+func TestUnmarshalRenewalInfo(t *testing.T) {
+	renewalInfoJSON := `{
+     "suggestedWindow": {
+       "start": "2021-01-03T00:00:00Z",
+       "end": "2021-01-07T00:00:00Z"
+     },
+     "explanationURL": "https://example.com/docs/example-mass-reissuance-event"
+   }`
+	expectedStart := time.Date(2021, time.January, 3, 0, 0, 0, 0, time.UTC)
+	expectedEnd := time.Date(2021, time.January, 7, 0, 0, 0, 0, time.UTC)
+
+	var info RenewalInfo
+	if err := json.Unmarshal([]byte(renewalInfoJSON), &info); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := url.Parse(info.ExplanationURL); err != nil {
+		t.Fatal(err)
+	}
+	if !info.SuggestedWindow.Start.Equal(expectedStart) {
+		t.Fatalf("%v != %v", expectedStart, info.SuggestedWindow.Start)
+	}
+	if !info.SuggestedWindow.End.Equal(expectedEnd) {
+		t.Fatalf("%v != %v", expectedEnd, info.SuggestedWindow.End)
 	}
 }
 
