@@ -267,27 +267,27 @@ func (c *Client) FetchRenewalInfo(ctx context.Context, leaf, issuer []byte) (*Re
 
 	parsedLeaf, err := x509.ParseCertificate(leaf)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing leaf certificate: %w", err)
 	}
 	parsedIssuer, err := x509.ParseCertificate(issuer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing issuer certificate: %w", err)
 	}
 
 	renewalURL, err := c.getRenewalURL(parsedLeaf, parsedIssuer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generating renewal info URL: %w", err)
 	}
 
 	res, err := c.get(ctx, renewalURL, wantStatus(http.StatusOK))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching renewal info: %w", err)
 	}
 	defer res.Body.Close()
 
 	var info RenewalInfo
 	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing renewal info response: %w", err)
 	}
 	return &info, nil
 }
@@ -300,7 +300,7 @@ func (c *Client) getRenewalURL(cert, issuer *x509.Certificate) (string, error) {
 		PublicKey asn1.BitString
 	}
 	if _, err := asn1.Unmarshal(issuer.RawSubjectPublicKeyInfo, &publicKeyInfo); err != nil {
-		return "", err
+		return "", fmt.Errorf("parsing RawSubjectPublicKeyInfo of the issuer certificate: %w", err)
 	}
 
 	h := crypto.SHA256.New()
@@ -329,7 +329,7 @@ func (c *Client) getRenewalURL(cert, issuer *x509.Certificate) (string, error) {
 		cert.SerialNumber,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshaling CertID: %w", err)
 	}
 
 	url := c.dir.RenewalInfoURL
