@@ -21,10 +21,10 @@
 package sign
 
 import (
+	"crypto/ed25519"
 	"io"
 
 	"github.com/tailscale/golang-x-crypto/internal/alias"
-	"golang.org/x/crypto/ed25519"
 )
 
 // Overhead is the number of bytes of overhead when signing a message.
