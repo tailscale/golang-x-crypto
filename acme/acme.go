@@ -260,7 +260,7 @@ func (c *Client) RevokeCert(ctx context.Context, key crypto.Signer, cert []byte,
 }
 
 // FetchRenewalInfo retrieves the RenewalInfo from Directory.RenewalInfoURL.
-func (c *Client) FetchRenewalInfo(ctx context.Context, leaf, issuer []byte) (*RenewalInfo, error) {
+func (c *Client) FetchRenewalInfo(ctx context.Context, leaf []byte) (*RenewalInfo, error) {
 	if _, err := c.Discover(ctx); err != nil {
 		return nil, err
 	}
@@ -269,12 +269,8 @@ func (c *Client) FetchRenewalInfo(ctx context.Context, leaf, issuer []byte) (*Re
 	if err != nil {
 		return nil, fmt.Errorf("parsing leaf certificate: %w", err)
 	}
-	parsedIssuer, err := x509.ParseCertificate(issuer)
-	if err != nil {
-		return nil, fmt.Errorf("parsing issuer certificate: %w", err)
-	}
 
-	renewalURL, err := c.getRenewalURL(parsedLeaf, parsedIssuer)
+	renewalURL, err := c.getRenewalURL(parsedLeaf)
 	if err != nil {
 		return nil, fmt.Errorf("generating renewal info URL: %w", err)
 	}
@@ -292,51 +288,16 @@ func (c *Client) FetchRenewalInfo(ctx context.Context, leaf, issuer []byte) (*Re
 	return &info, nil
 }
 
-func (c *Client) getRenewalURL(cert, issuer *x509.Certificate) (string, error) {
-	// See https://www.ietf.org/archive/id/draft-ietf-acme-ari-01.html#name-getting-renewal-information
+func (c *Client) getRenewalURL(cert *x509.Certificate) (string, error) {
+	// See https://www.ietf.org/archive/id/draft-ietf-acme-ari-04.html#name-the-renewalinfo-resource
 	// for how the request URL is built.
-	var publicKeyInfo struct {
-		Algorithm pkix.AlgorithmIdentifier
-		PublicKey asn1.BitString
-	}
-	if _, err := asn1.Unmarshal(issuer.RawSubjectPublicKeyInfo, &publicKeyInfo); err != nil {
-		return "", fmt.Errorf("parsing RawSubjectPublicKeyInfo of the issuer certificate: %w", err)
-	}
-
-	h := crypto.SHA256.New()
-	h.Write(publicKeyInfo.PublicKey.RightAlign())
-	issuerKeyHash := h.Sum(nil)
-
-	h.Reset()
-	h.Write(issuer.RawSubject)
-	issuerNameHash := h.Sum(nil)
-
-	// CertID ASN1 structure defined in
-	// https://datatracker.ietf.org/doc/html/rfc6960#section-4.1.1
-	certID, err := asn1.Marshal(struct {
-		HashAlgorithm pkix.AlgorithmIdentifier
-		NameHash      []byte
-		IssuerKeyHash []byte
-		SerialNumber  *big.Int
-	}{
-		pkix.AlgorithmIdentifier{
-			// SHA256 OID
-			Algorithm:  asn1.ObjectIdentifier([]int{2, 16, 840, 1, 101, 3, 4, 2, 1}),
-			Parameters: asn1.RawValue{Tag: 5 /* ASN.1 NULL */},
-		},
-		issuerNameHash,
-		issuerKeyHash,
-		cert.SerialNumber,
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshaling CertID: %w", err)
-	}
-
 	url := c.dir.RenewalInfoURL
 	if !strings.HasSuffix(url, "/") {
 		url += "/"
 	}
-	return url + base64.RawURLEncoding.EncodeToString(certID), nil
+	aki := base64.RawURLEncoding.EncodeToString(cert.AuthorityKeyId)
+	serial := base64.RawURLEncoding.EncodeToString(cert.SerialNumber.Bytes())
+	return fmt.Sprintf("%s%s.%s", url, aki, serial), nil
 }
 
 // AcceptTOS always returns true to indicate the acceptance of a CA's Terms of Service

@@ -511,34 +511,6 @@ func TestFetchCertSize(t *testing.T) {
 }
 
 const (
-	issuerPEM = `-----BEGIN CERTIFICATE-----
-MIIE3DCCA0SgAwIBAgIRAPoe8bsoe0klnS+2X8jSXe0wDQYJKoZIhvcNAQELBQAw
-gYUxHjAcBgNVBAoTFW1rY2VydCBkZXZlbG9wbWVudCBDQTEtMCsGA1UECwwkY3Bh
-bG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMTQwMgYDVQQDDCtta2Nl
-cnQgY3BhbG1lckBwdW1wa2luLmxvY2FsIChDaHJpcyBQYWxtZXIpMB4XDTIzMDcx
-MjE4MjIxNloXDTMzMDcxMjE4MjIxNlowgYUxHjAcBgNVBAoTFW1rY2VydCBkZXZl
-bG9wbWVudCBDQTEtMCsGA1UECwwkY3BhbG1lckBwdW1wa2luLmxvY2FsIChDaHJp
-cyBQYWxtZXIpMTQwMgYDVQQDDCtta2NlcnQgY3BhbG1lckBwdW1wa2luLmxvY2Fs
-IChDaHJpcyBQYWxtZXIpMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA
-vsqsjjsfOwfwHJO9/st4+bA5Y05puXzjiX+B586Zm3nneQpxTb35vTA7hUn5kT9h
-+AlEfOvs1t17NNvQ0NjDXID5xSTfzBU/STAG4gKCGkzJPma++TWM+dlRaL7ZICvE
-qigVtbZeCZbu56j0kaZ9eYZyvS1itkTIhN/67qsh7j7BlDhLR1m7jQNz7QaNtLkJ
-8NJzKUVmpFHssLBBHkQSWpC7deJczcwZvBI7WbjJyz5xt+gw6sPvNtzGzu+jRmjD
-6GtQFbAcV7OTkUDIaxiiO8d5MPqYFTTntPH0Tj/JwEmbUteICYe7aH7Oq/aYWD2I
-407ymNjOh1YVHZuOaZVMgw2bhzLWnQYQtO2fTxQud+ppd7T4RFvirYD4Nv/TGjtx
-M3YidhioHgd1i41BfSaq+g/QjBljJRygWJo+HX4xRHS3FZvMLtC2/drxVETZyWYj
-YVOK+BTteZf5xOSlVqSZ0I1lF0GEiglPrz7ki0zcOL5H8J4V+kKSE+3oIhM/dvG1
-AgMBAAGjRTBDMA4GA1UdDwEB/wQEAwICBDASBgNVHRMBAf8ECDAGAQH/AgEAMB0G
-A1UdDgQWBBT6S+ENDu2e76E5I59q6xQrH7PE2zANBgkqhkiG9w0BAQsFAAOCAYEA
-dZJMBDtrgdTnV4r4XxPwjShFcGxnEHVRbKOixw6euVvfHutCyKljlwQAwKhTJ9iM
-ua48h72jlWtgAXDLDXCV7SSYilGhBGECEubxxDGE/b9TBxHediopxQp9wogeUhmV
-9BXw0ppJbH1CLmL5bfTR7cJZVz6M8XuqSzTayxuUImcoUNO7dNV0Q5igWRb8vUUK
-ITX9tA54qOF3ENQLmeouDdtdJJLI2ExUoqO8XEKwMFg+Pj4AVu2kyzziCCela2ji
-TUNcLW0ri2wwY8cc+IsF40tUjcMKlHp1NHVlawgP4wKW7YlEOweGLUFFKTxvTlSZ
-gQDZANpuJL7Wqrmu8edffCOnMVxGrSLm6HuVc/RembdguWOPgKb8QImpJQcYv+RD
-1KZpqFsCEAED46v7Ea5jrSsyJ/ZysvMC8RfYS55wMTwfaZyVldFW9U3ElzoaWsei
-ip2IXMXY/9RjRwc4RGEJcMyIGKXRUat9blzBtv/pNv1uChG2GDCbhltCyz3v5Tn/
------END CERTIFICATE-----`
 	leafPEM = `-----BEGIN CERTIFICATE-----
 MIIEizCCAvOgAwIBAgIRAITApw7R8HSs7GU7cj8dEyUwDQYJKoZIhvcNAQELBQAw
 gYUxHjAcBgNVBAoTFW1rY2VydCBkZXZlbG9wbWVudCBDQTEtMCsGA1UECwwkY3Bh
@@ -570,19 +542,14 @@ niQI8IsWD5LcQ1Eg7kCq
 
 func TestGetRenewalURL(t *testing.T) {
 	leaf, _ := pem.Decode([]byte(leafPEM))
-	issuer, _ := pem.Decode([]byte(issuerPEM))
 
 	parsedLeaf, err := x509.ParseCertificate(leaf.Bytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsedIssuer, err := x509.ParseCertificate(issuer.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	client := newTestClientWithMockDirectory()
-	urlString, err := client.getRenewalURL(parsedLeaf, parsedIssuer)
+	urlString, err := client.getRenewalURL(parsedLeaf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,10 +572,21 @@ func TestGetRenewalURL(t *testing.T) {
 	if slash == -1 {
 		t.Fatalf("malformed URL path: %q from %q", path, urlString)
 	}
-	certIDPart := path[slash+1:]
-	if certIDPart == "" {
-		t.Fatalf("missing certID part in URL path: %q from %q", path, urlString)
+	certID := path[slash+1:]
+	if certID == "" {
+		t.Fatalf("missing certificate identifier in URL path: %q from %q", path, urlString)
 	}
+	certIDParts := strings.Split(certID, ".")
+	if len(certIDParts) != 2 {
+		t.Fatalf("certificate identifier should consist of 2 base64-encoded values separated by a dot: %q from %q", certID, urlString)
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(certIDParts[0]); err != nil {
+		t.Fatalf("malformed AKI part in certificate identifier: %q from %q: %v", certIDParts[0], urlString, err)
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(certIDParts[1]); err != nil {
+		t.Fatalf("malformed Serial part in certificate identifier: %q from %q: %v", certIDParts[1], urlString, err)
+	}
+
 }
 
 func TestUnmarshalRenewalInfo(t *testing.T) {
