@@ -443,7 +443,9 @@ type ServerAuthCallbacks struct {
 
 // PartialSuccessError can be returned by any of the [ServerConfig]
 // authentication callbacks to indicate to the client that authentication has
-// partially succeeded, but further steps are required.
+// partially succeeded, but further steps are required. This error is checked
+// using errors.As and so implementations can compose it with other errors, for
+// example a [BannerError].
 type PartialSuccessError struct {
 	// Next defines the authentication callbacks to apply to further steps. The
 	// available methods communicated to the client are based on the non-nil
@@ -453,6 +455,19 @@ type PartialSuccessError struct {
 
 func (p *PartialSuccessError) Error() string {
 	return "ssh: authenticated with partial success"
+}
+
+// ChangeAuthMethodsError can be returned by any of the [ServerConfig]
+// authentication callbacks to change the allowed authentication methods. This
+// error is checked using errors.As and so implementations can compose it with
+// other errors, for example a [BannerError].
+type ChangeAuthMethodsError struct {
+	Next ServerAuthCallbacks
+}
+
+func (e *ChangeAuthMethodsError) Error() string {
+	// We return a generic error string.
+	return "ssh: authentication failed"
 }
 
 // ErrNoAuth is the error value returned if no
@@ -489,7 +504,7 @@ func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, err
 	noneAuthCount := 0
 	var authErrs []error
 	var displayedBanner bool
-	partialSuccessReturned := false
+	authMethodsChanged := false
 	// Set the initial authentication callbacks from the config. They can be
 	// changed if a PartialSuccessError is returned.
 	authConfig := ServerAuthCallbacks{
@@ -528,8 +543,8 @@ userAuthLoop:
 			return nil, errors.New("ssh: client attempted to negotiate for unknown service: " + userAuthReq.Service)
 		}
 
-		if s.user != userAuthReq.User && partialSuccessReturned {
-			return nil, fmt.Errorf("ssh: client changed the user after a partial success authentication, previous user %q, current user %q",
+		if s.user != userAuthReq.User && authMethodsChanged {
+			return nil, fmt.Errorf("ssh: client changed the user after we returned user specific authentication methods, previous user %q, current user %q",
 				s.user, userAuthReq.User)
 		}
 
@@ -556,7 +571,7 @@ userAuthLoop:
 			noneAuthCount++
 			// We don't allow none authentication after a partial success
 			// response.
-			if config.NoClientAuth && !partialSuccessReturned {
+			if config.NoClientAuth && !authMethodsChanged {
 				if config.NoClientAuthCallback != nil {
 					perms, authErr = config.NoClientAuthCallback(s)
 				} else {
@@ -620,12 +635,13 @@ userAuthLoop:
 
 			candidate, ok := cache.get(s.user, pubKeyData)
 			if !ok {
+				var partialSuccess *PartialSuccessError
+
 				candidate.user = s.user
 				candidate.pubKeyData = pubKeyData
 				candidate.perms, candidate.result = authConfig.PublicKeyCallback(s, pubKey)
-				_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
 
-				if (candidate.result == nil || isPartialSuccessError) &&
+				if (candidate.result == nil || errors.As(candidate.result, &partialSuccess)) &&
 					candidate.perms != nil &&
 					candidate.perms.CriticalOptions != nil &&
 					candidate.perms.CriticalOptions[sourceAddressCriticalOption] != "" {
@@ -645,8 +661,10 @@ userAuthLoop:
 				if len(payload) > 0 {
 					return nil, parseError(msgUserAuthRequest)
 				}
-				_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
-				if candidate.result == nil || isPartialSuccessError {
+
+				var partialSuccess *PartialSuccessError
+
+				if candidate.result == nil || errors.As(candidate.result, &partialSuccess) {
 					okMsg := userAuthPubKeyOkMsg{
 						Algo:   algo,
 						PubKey: pubKeyData,
@@ -769,20 +787,11 @@ userAuthLoop:
 		}
 
 		var failureMsg userAuthFailureMsg
+		var newAuthCallbacks *ServerAuthCallbacks
+		var partialSuccess *PartialSuccessError
 
-		if partialSuccess, ok := authErr.(*PartialSuccessError); ok {
-			// After a partial success error we don't allow changing the user
-			// name and execute the NoClientAuthCallback.
-			partialSuccessReturned = true
-
-			// In case a partial success is returned, the server may send
-			// a new set of authentication methods.
-			authConfig = partialSuccess.Next
-
-			// Reset pubkey cache, as the new PublicKeyCallback might
-			// accept a different set of public keys.
-			cache = pubKeyCache{}
-
+		if errors.As(authErr, &partialSuccess) {
+			newAuthCallbacks = &partialSuccess.Next
 			// Send back a partial success message to the user.
 			failureMsg.PartialSuccess = true
 		} else {
@@ -790,6 +799,29 @@ userAuthLoop:
 			if authFailures > 0 || userAuthReq.Method != "none" || noneAuthCount != 1 {
 				authFailures++
 			}
+		}
+
+		if newAuthCallbacks == nil {
+			var changeAuthMethods *ChangeAuthMethodsError
+
+			if errors.As(authErr, &changeAuthMethods) {
+				newAuthCallbacks = &changeAuthMethods.Next
+			}
+		}
+
+		if newAuthCallbacks != nil {
+			// After changhing authentication callbacks we don't allow changing
+			// the user name and execute the NoClientAuthCallback becase we have
+			// returned user specific authentication methods.
+			authMethodsChanged = true
+
+			// Set the new authentication methods.
+			authConfig = *newAuthCallbacks
+
+			// Reset pubkey cache, as the new PublicKeyCallback might
+			// accept a different set of public keys.
+			cache = pubKeyCache{}
+		} else {
 			if config.MaxAuthTries > 0 && authFailures >= config.MaxAuthTries {
 				// If we have hit the max attempts, don't bother sending the
 				// final SSH_MSG_USERAUTH_FAILURE message, since there are
