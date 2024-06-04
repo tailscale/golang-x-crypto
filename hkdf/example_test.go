@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"io"
 
-	"golang.org/x/crypto/hkdf"
+	"github.com/tailscale/golang-x-crypto/hkdf"
 )
 
 // Usage example that expands one master secret into three other

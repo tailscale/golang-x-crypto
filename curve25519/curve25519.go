@@ -8,7 +8,7 @@
 //
 // Starting in Go 1.20, this package is a wrapper for the X25519 implementation
 // in the crypto/ecdh package.
-package curve25519 // import "golang.org/x/crypto/curve25519"
+package curve25519 // import "github.com/tailscale/golang-x-crypto/curve25519"
 
 // ScalarMult sets dst to the product scalar * point.
 //

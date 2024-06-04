@@ -21,9 +21,9 @@
 // For encryption, use the full ChaCha20-Poly1305 construction implemented by
 // golang.org/x/crypto/chacha20poly1305. For authentication, use a general
 // purpose MAC such as HMAC implemented by crypto/hmac.
-package poly1305 // import "golang.org/x/crypto/poly1305"
+package poly1305 // import "github.com/tailscale/golang-x-crypto/poly1305"
 
-import "golang.org/x/crypto/internal/poly1305"
+import "github.com/tailscale/golang-x-crypto/internal/poly1305"
 
 // TagSize is the size, in bytes, of a poly1305 authenticator.
 //

@@ -1,4 +1,4 @@
-module golang.org/x/crypto
+module github.com/tailscale/golang-x-crypto
 
 go 1.18
 

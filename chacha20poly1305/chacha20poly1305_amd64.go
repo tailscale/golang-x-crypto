@@ -9,7 +9,7 @@ package chacha20poly1305
 import (
 	"encoding/binary"
 
-	"golang.org/x/crypto/internal/alias"
+	"github.com/tailscale/golang-x-crypto/internal/alias"
 	"golang.org/x/sys/cpu"
 )
 
