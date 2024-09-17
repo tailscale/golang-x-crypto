@@ -59,6 +59,30 @@ type GSSAPIWithMICConfig struct {
 	Server GSSAPIServer
 }
 
+// SendAuthanner implements [ServerPreAuthConn].
+func (s *connection) SendAuthBanner(msg string) error {
+	if s.serverAuthComplete.Load() {
+		return errors.New("ssh: SendAuthBanner outside of authentication phase")
+	}
+	return s.transport.writePacket(Marshal(&userAuthBannerMsg{
+		Message: msg,
+	}))
+}
+
+func (*connection) unexportedMethodForFutureProofing() {}
+
+// ServerPreAuthConn is the interface available on an incoming server
+// connection before authentication has completed.
+type ServerPreAuthConn interface {
+	unexportedMethodForFutureProofing() // permits growing ServerPreAuthConn safely later, ala testing.TB
+
+	ConnMetadata
+
+	// SendAuthBanner sends a baner message to the client.
+	// It returns an error once the authentication phase has ended.
+	SendAuthBanner(string) error
+}
+
 // ServerConfig holds server specific configuration data.
 type ServerConfig struct {
 	// Config contains configuration shared between client and server.
@@ -117,6 +141,11 @@ type ServerConfig struct {
 	// AuthLogCallback, if non-nil, is called to log all authentication
 	// attempts.
 	AuthLogCallback func(conn ConnMetadata, method string, err error)
+
+	// PreAuthConnCallback, if non-nil, is called upon receiving a new connection
+	// before any authentication has started. The provided ServerPreAuthConn
+	// can be used before authentication is complete.
+	PreAuthConnCallback func(ServerPreAuthConn)
 
 	// ServerVersion is the version identification string to announce in
 	// the public handshake.
@@ -230,6 +259,7 @@ func NewServerConn(c net.Conn, config *ServerConfig) (*ServerConn, <-chan NewCha
 		sshConn: sshConn{conn: c},
 	}
 	perms, err := s.serverHandshake(&fullConf)
+	s.serverAuthComplete.Store(true)
 	if err != nil {
 		c.Close()
 		return nil, nil, nil, err
@@ -481,6 +511,10 @@ func (b *BannerError) Error() string {
 }
 
 func (s *connection) serverAuthenticate(config *ServerConfig) (*Permissions, error) {
+	if config.PreAuthConnCallback != nil {
+		config.PreAuthConnCallback(s)
+	}
+
 	sessionID := s.transport.getSessionID()
 	var cache pubKeyCache
 	var perms *Permissions

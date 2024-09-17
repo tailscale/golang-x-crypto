@@ -7,6 +7,7 @@ package ssh
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 )
 
 // OpenChannelError is returned if the other side rejects an
@@ -88,6 +89,11 @@ func DiscardRequests(in <-chan *Request) {
 type connection struct {
 	transport *handshakeTransport
 	sshConn
+
+	// serverAuthComplete is whether, when used as an incoming server
+	// auth connection, the auth phase is complete. This is used to prevent
+	// use of ServerPreAuthConn after the auth phase is complete.
+	serverAuthComplete atomic.Bool
 
 	// The connection protocol.
 	*mux
