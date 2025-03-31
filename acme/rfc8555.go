@@ -210,6 +210,7 @@ func (c *Client) AuthorizeOrder(ctx context.Context, id []AuthzID, opt ...OrderO
 		NotBefore   string        `json:"notBefore,omitempty"`
 		NotAfter    string        `json:"notAfter,omitempty"`
 		Replaces    string        `json:"replaces,omitempty"`
+		Profile     string        `json:"profile,omitempty"`
 	}{}
 	for _, v := range id {
 		req.Identifiers = append(req.Identifiers, wireAuthzID{
@@ -231,6 +232,15 @@ func (c *Client) AuthorizeOrder(ctx context.Context, id []AuthzID, opt ...OrderO
 				return nil, fmt.Errorf("failed to parse certificate being replaced: %w", err)
 			}
 			req.Replaces = certRenewalIdentifier(cert)
+		case orderProfileOpt:
+			if !dir.Profiles.isSupported() {
+				return nil, ErrCADoesNotSupportProfiles
+			}
+			profileName := string(o)
+			if !dir.Profiles.Has(profileName) {
+				return nil, fmt.Errorf("%w %s", ErrProfileNotInSetOfSupportedProfiles, profileName)
+			}
+			req.Profile = profileName
 		default:
 			// Package's fault if we let this happen.
 			panic(fmt.Sprintf("unsupported order option type %T", o))
