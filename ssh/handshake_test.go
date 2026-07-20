@@ -367,7 +367,7 @@ type errorKeyingTransport struct {
 	readLeft, writeLeft int
 }
 
-func (n *errorKeyingTransport) prepareKeyChange(*algorithms, *kexResult) error {
+func (n *errorKeyingTransport) prepareKeyChange(*NegotiatedAlgorithms, *kexResult) error {
 	return nil
 }
 
@@ -539,10 +539,230 @@ func TestDisconnect(t *testing.T) {
 	}
 }
 
+type mockKeyingTransport struct {
+	packetConn
+	kexInitAllowed chan struct{}
+	kexInitSent    chan struct{}
+}
+
+func (n *mockKeyingTransport) prepareKeyChange(*NegotiatedAlgorithms, *kexResult) error {
+	return nil
+}
+
+func (n *mockKeyingTransport) writePacket(packet []byte) error {
+	if packet[0] == msgKexInit {
+		<-n.kexInitAllowed
+		n.kexInitSent <- struct{}{}
+	}
+	return n.packetConn.writePacket(packet)
+}
+
+func (n *mockKeyingTransport) readPacket() ([]byte, error) {
+	return n.packetConn.readPacket()
+}
+
+func (n *mockKeyingTransport) setStrictMode() error { return nil }
+
+func (n *mockKeyingTransport) setInitialKEXDone() {}
+
+func TestHandshakePendingPacketsWait(t *testing.T) {
+	a, b := memPipe()
+
+	trS := &mockKeyingTransport{
+		packetConn:     a,
+		kexInitAllowed: make(chan struct{}, 2),
+		kexInitSent:    make(chan struct{}, 2),
+	}
+	// Allow the first KEX.
+	trS.kexInitAllowed <- struct{}{}
+
+	trC := &mockKeyingTransport{
+		packetConn:     b,
+		kexInitAllowed: make(chan struct{}, 2),
+		kexInitSent:    make(chan struct{}, 2),
+	}
+	// Allow the first KEX.
+	trC.kexInitAllowed <- struct{}{}
+
+	clientConf := &ClientConfig{
+		HostKeyCallback: InsecureIgnoreHostKey(),
+	}
+	clientConf.SetDefaults()
+
+	v := []byte("version")
+	client := newClientTransport(trC, v, v, clientConf, "addr", nil)
+
+	serverConf := &ServerConfig{}
+	serverConf.AddHostKey(testSigners["ecdsa"])
+	serverConf.AddHostKey(testSigners["rsa"])
+	serverConf.SetDefaults()
+	server := newServerTransport(trS, v, v, serverConf)
+
+	if err := server.waitSession(); err != nil {
+		t.Fatalf("server.waitSession: %v", err)
+	}
+	if err := client.waitSession(); err != nil {
+		t.Fatalf("client.waitSession: %v", err)
+	}
+
+	<-trC.kexInitSent
+	<-trS.kexInitSent
+
+	// Allow and request new KEX server side.
+	trS.kexInitAllowed <- struct{}{}
+	server.requestKeyExchange()
+	// Wait until the KEX init is sent.
+	<-trS.kexInitSent
+	// The client is not allowed to respond to the KEX, so writes will be
+	// blocked on the server side once the packets queue is full.
+	for i := 0; i < maxPendingPackets; i++ {
+		p := []byte{msgRequestSuccess, byte(i)}
+		if err := server.writePacket(p); err != nil {
+			t.Errorf("unexpected write error: %v", err)
+		}
+	}
+	// The packets queue is now full, the next write will block.
+	server.mu.Lock()
+	if len(server.pendingPackets) != maxPendingPackets {
+		t.Errorf("unexpected pending packets size; got: %d, want: %d", len(server.pendingPackets), maxPendingPackets)
+	}
+	server.mu.Unlock()
+
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+
+		p := []byte{msgRequestSuccess, byte(65)}
+		// This write will block until KEX completes.
+		err := server.writePacket(p)
+		if err != nil {
+			t.Errorf("unexpected write error: %v", err)
+		}
+	}()
+
+	// Consume packets on the client side
+	readDone := make(chan bool)
+	go func() {
+		defer close(readDone)
+
+		for {
+			if _, err := client.readPacket(); err != nil {
+				if err != io.EOF {
+					t.Errorf("unexpected read error: %v", err)
+				}
+				break
+			}
+		}
+	}()
+
+	// Allow the client to reply to the KEX and so unblock the write goroutine.
+	trC.kexInitAllowed <- struct{}{}
+	<-trC.kexInitSent
+	<-writeDone
+	// Close the client to unblock the read goroutine.
+	client.Close()
+	<-readDone
+	server.Close()
+}
+
+func TestHandshakePendingPacketsError(t *testing.T) {
+	a, b := memPipe()
+
+	trS := &mockKeyingTransport{
+		packetConn:     a,
+		kexInitAllowed: make(chan struct{}, 2),
+		kexInitSent:    make(chan struct{}, 2),
+	}
+	// Allow the first KEX.
+	trS.kexInitAllowed <- struct{}{}
+
+	trC := &mockKeyingTransport{
+		packetConn:     b,
+		kexInitAllowed: make(chan struct{}, 2),
+		kexInitSent:    make(chan struct{}, 2),
+	}
+	// Allow the first KEX.
+	trC.kexInitAllowed <- struct{}{}
+
+	clientConf := &ClientConfig{
+		HostKeyCallback: InsecureIgnoreHostKey(),
+	}
+	clientConf.SetDefaults()
+
+	v := []byte("version")
+	client := newClientTransport(trC, v, v, clientConf, "addr", nil)
+
+	serverConf := &ServerConfig{}
+	serverConf.AddHostKey(testSigners["ecdsa"])
+	serverConf.AddHostKey(testSigners["rsa"])
+	serverConf.SetDefaults()
+	server := newServerTransport(trS, v, v, serverConf)
+
+	if err := server.waitSession(); err != nil {
+		t.Fatalf("server.waitSession: %v", err)
+	}
+	if err := client.waitSession(); err != nil {
+		t.Fatalf("client.waitSession: %v", err)
+	}
+
+	<-trC.kexInitSent
+	<-trS.kexInitSent
+
+	// Allow and request new KEX server side.
+	trS.kexInitAllowed <- struct{}{}
+	server.requestKeyExchange()
+	// Wait until the KEX init is sent.
+	<-trS.kexInitSent
+	// The client is not allowed to respond to the KEX, so writes will be
+	// blocked on the server side once the packets queue is full.
+	for i := 0; i < maxPendingPackets; i++ {
+		p := []byte{msgRequestSuccess, byte(i)}
+		if err := server.writePacket(p); err != nil {
+			t.Errorf("unexpected write error: %v", err)
+		}
+	}
+	// The packets queue is now full, the next write will block.
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+
+		p := []byte{msgRequestSuccess, byte(65)}
+		// This write will block until KEX completes.
+		err := server.writePacket(p)
+		if err != io.EOF {
+			t.Errorf("unexpected write error: %v", err)
+		}
+	}()
+
+	// Consume packets on the client side
+	readDone := make(chan bool)
+	go func() {
+		defer close(readDone)
+
+		for {
+			if _, err := client.readPacket(); err != nil {
+				if err != io.EOF {
+					t.Errorf("unexpected read error: %v", err)
+				}
+				break
+			}
+		}
+	}()
+
+	// Close the server to unblock the write after an error
+	server.Close()
+	<-writeDone
+	// Unblock the pending write and close the client to unblock the read
+	// goroutine.
+	trC.kexInitAllowed <- struct{}{}
+	client.Close()
+	<-readDone
+}
+
 func TestHandshakeRekeyDefault(t *testing.T) {
 	clientConf := &ClientConfig{
 		Config: Config{
-			Ciphers: []string{"aes128-ctr"},
+			Ciphers: []string{CipherAES128CTR},
 		},
 		HostKeyCallback: InsecureIgnoreHostKey(),
 	}
@@ -568,7 +788,7 @@ func TestHandshakeRekeyDefault(t *testing.T) {
 }
 
 func TestHandshakeAEADCipherNoMAC(t *testing.T) {
-	for _, cipher := range []string{chacha20Poly1305ID, gcm128CipherID} {
+	for _, cipher := range []string{CipherChaCha20Poly1305, CipherAES128GCM} {
 		checker := &syncChecker{
 			called: make(chan int, 1),
 		}
@@ -1017,5 +1237,130 @@ func TestStrictKEXMixed(t *testing.T) {
 	}
 	if err := client.waitSession(); err != nil {
 		t.Fatalf("client.waitSession: %v", err)
+	}
+}
+
+func TestNegotiatedAlgorithms(t *testing.T) {
+	c1, c2, err := netPipe()
+	if err != nil {
+		t.Fatalf("netPipe: %v", err)
+	}
+	defer c1.Close()
+	defer c2.Close()
+
+	var serverAlgorithms NegotiatedAlgorithms
+
+	serverConf := &ServerConfig{
+		PasswordCallback: func(conn ConnMetadata, password []byte) (*Permissions, error) {
+			if algorithmConn, ok := conn.(AlgorithmsConnMetadata); ok {
+				serverAlgorithms = algorithmConn.Algorithms()
+				return &Permissions{}, nil
+			}
+			return nil, errors.New("server conn does not implement AlgorithmsConnMetadata")
+		},
+	}
+	serverConf.AddHostKey(testSigners["rsa"])
+	go NewServerConn(c1, serverConf)
+
+	clientConf := &ClientConfig{
+		User:            "test",
+		Auth:            []AuthMethod{Password("testpw")},
+		HostKeyCallback: FixedHostKey(testSigners["rsa"].PublicKey()),
+	}
+
+	if conn, _, _, err := NewClientConn(c2, "", clientConf); err != nil {
+		t.Fatal(err)
+	} else {
+		if algorithmConn, ok := conn.(AlgorithmsConnMetadata); ok {
+			clientAlgorithms := algorithmConn.Algorithms()
+			if clientAlgorithms.HostKey == "" {
+				t.Fatal("negotiated client host key is empty")
+			}
+			if clientAlgorithms.KeyExchange == "" {
+				t.Fatal("negotiated client KEX is empty")
+			}
+			if clientAlgorithms.Read.Cipher == "" {
+				t.Fatal("negotiated client read cipher is empty")
+			}
+			if clientAlgorithms.Write.Cipher == "" {
+				t.Fatal("negotiated client write cipher is empty")
+			}
+			if !reflect.DeepEqual(clientAlgorithms, serverAlgorithms) {
+				t.Fatalf("negotiated client algorithms: %+v differs from negotiated server algorithms: %+v",
+					clientAlgorithms, serverAlgorithms)
+			}
+		} else {
+			t.Fatal("client conn does not implement AlgorithmsConnMetadata")
+		}
+	}
+}
+
+func TestAlgorithmNegotiationError(t *testing.T) {
+	c1, c2, err := netPipe()
+	if err != nil {
+		t.Fatalf("netPipe: %v", err)
+	}
+	defer c1.Close()
+	defer c2.Close()
+
+	serverConf := &ServerConfig{
+		Config: Config{
+			Ciphers: []string{CipherAES128CTR, CipherAES256CTR},
+		},
+		PasswordCallback: func(conn ConnMetadata, password []byte) (*Permissions, error) {
+			return &Permissions{}, nil
+		},
+	}
+	serverConf.AddHostKey(testSigners["rsa"])
+
+	srvErrCh := make(chan error, 1)
+	go func() {
+		_, _, _, err := NewServerConn(c1, serverConf)
+		srvErrCh <- err
+	}()
+
+	clientConf := &ClientConfig{
+		Config: Config{
+			Ciphers: []string{CipherAES128GCM, CipherAES256GCM},
+		},
+		User:            "test",
+		Auth:            []AuthMethod{Password("testpw")},
+		HostKeyCallback: FixedHostKey(testSigners["rsa"].PublicKey()),
+	}
+
+	_, _, _, err = NewClientConn(c2, "", clientConf)
+	if err == nil {
+		t.Fatal("client connection succeeded expected algorithm negotiation error")
+	}
+	var negotiationError *AlgorithmNegotiationError
+	if !errors.As(err, &negotiationError) {
+		t.Fatalf("expected algorithm negotiation error, got %v", err)
+	}
+	expectedErrorString := fmt.Sprintf("ssh: handshake failed: ssh: no common algorithm for client to server cipher; we offered: %q, peer offered: %q",
+		clientConf.Ciphers, serverConf.Ciphers)
+	if err.Error() != expectedErrorString {
+		t.Fatalf("expected error string %q, got %q", expectedErrorString, err.Error())
+	}
+	if !reflect.DeepEqual(negotiationError.RequestedAlgorithms, serverConf.Ciphers) {
+		t.Fatalf("expected requested algorithms %v, got %v", serverConf.Ciphers, negotiationError.RequestedAlgorithms)
+	}
+	if !reflect.DeepEqual(negotiationError.SupportedAlgorithms, clientConf.Ciphers) {
+		t.Fatalf("expected supported algorithms %v, got %v", clientConf.Ciphers, negotiationError.SupportedAlgorithms)
+	}
+	err = <-srvErrCh
+	negotiationError = nil
+	if !errors.As(err, &negotiationError) {
+		t.Fatalf("expected algorithm negotiation error, got %v", err)
+	}
+	expectedErrorString = fmt.Sprintf("ssh: no common algorithm for client to server cipher; we offered: %q, peer offered: %q",
+		serverConf.Ciphers, clientConf.Ciphers)
+	if err.Error() != expectedErrorString {
+		t.Fatalf("expected error string %q, got %q", expectedErrorString, err.Error())
+	}
+	if !reflect.DeepEqual(negotiationError.RequestedAlgorithms, clientConf.Ciphers) {
+		t.Fatalf("expected requested algorithms %v, got %v", clientConf.Ciphers, negotiationError.RequestedAlgorithms)
+	}
+	if !reflect.DeepEqual(negotiationError.SupportedAlgorithms, serverConf.Ciphers) {
+		t.Fatalf("expected supported algorithms %v, got %v", serverConf.Ciphers, negotiationError.SupportedAlgorithms)
 	}
 }

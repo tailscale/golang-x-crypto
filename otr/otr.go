@@ -8,7 +8,11 @@
 // The version of OTR implemented by this package has been deprecated
 // (https://bugs.otr.im/lib/libotr/issues/140). An implementation of OTRv3 is
 // available at https://github.com/coyim/otr3.
-package otr // import "golang.org/x/crypto/otr"
+//
+// The otr package is [frozen] and is not accepting new features.
+//
+// [frozen]: https://go.dev/wiki/Frozen
+package otr
 
 import (
 	"bytes"
