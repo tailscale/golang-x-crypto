@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"math/rand"
 	"reflect"
+	"strings"
 	"testing"
 	"testing/quick"
 )
@@ -206,6 +207,87 @@ func TestMarshalMultiTag(t *testing.T) {
 	}
 }
 
+func TestDecode(t *testing.T) {
+	rnd := rand.New(rand.NewSource(0))
+	kexInit := new(kexInitMsg).Generate(rnd, 10).Interface()
+	kexDHInit := new(kexDHInitMsg).Generate(rnd, 10).Interface()
+	kexDHReply := new(kexDHReplyMsg)
+	kexDHReply.Y = randomInt(rnd)
+	// Note: userAuthSuccessMsg can't be tested directly since it
+	// doesn't have a field for sshtype. So it's tested separately
+	// at the end.
+	decodeMessageTypes := []interface{}{
+		new(disconnectMsg),
+		new(serviceRequestMsg),
+		new(serviceAcceptMsg),
+		new(extInfoMsg),
+		kexInit,
+		kexDHInit,
+		kexDHReply,
+		new(userAuthRequestMsg),
+		new(userAuthFailureMsg),
+		new(userAuthBannerMsg),
+		new(userAuthPubKeyOkMsg),
+		new(globalRequestMsg),
+		new(globalRequestSuccessMsg),
+		new(globalRequestFailureMsg),
+		new(channelOpenMsg),
+		new(channelDataMsg),
+		new(channelOpenConfirmMsg),
+		new(channelOpenFailureMsg),
+		new(windowAdjustMsg),
+		new(channelEOFMsg),
+		new(channelCloseMsg),
+		new(channelRequestMsg),
+		new(channelRequestSuccessMsg),
+		new(channelRequestFailureMsg),
+		new(userAuthGSSAPIToken),
+		new(userAuthGSSAPIMIC),
+		new(userAuthGSSAPIErrTok),
+		new(userAuthGSSAPIError),
+	}
+	for _, msg := range decodeMessageTypes {
+		decoded, err := decode(Marshal(msg))
+		if err != nil {
+			t.Errorf("error decoding %T", msg)
+		} else if reflect.TypeOf(msg) != reflect.TypeOf(decoded) {
+			t.Errorf("error decoding %T, unexpected %T", msg, decoded)
+		}
+	}
+
+	userAuthSuccess, err := decode([]byte{msgUserAuthSuccess})
+	if err != nil {
+		t.Errorf("error decoding userAuthSuccessMsg")
+	} else if _, ok := userAuthSuccess.(*userAuthSuccessMsg); !ok {
+		t.Errorf("error decoding userAuthSuccessMsg, unexpected %T", userAuthSuccess)
+	}
+}
+
+func TestDisconnectMsgSanitizesMessage(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"clean message", `"clean message"`},
+		{"line1\nline2\nline3", `"line1\nline2\nline3"`},
+		{"has\x00null\x00bytes", `"has\x00null\x00bytes"`},
+		{"\x1b[31mred\x1b[0m", `"\x1b[31mred\x1b[0m"`},
+		{"newline\r\nCRLF", `"newline\r\nCRLF"`},
+		{"tab\there", `"tab\there"`},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			d := &disconnectMsg{Reason: 11, Message: tc.in}
+			got := d.Error()
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+			if bad := "\n\r\x00\x1b"; strings.ContainsAny(got, bad) {
+				t.Errorf("got %q, want none of %q", got, bad)
+			}
+		})
+	}
+}
+
 func randomBytes(out []byte, rand *rand.Rand) {
 	for i := 0; i < len(out); i++ {
 		out[i] = byte(rand.Int31())
@@ -262,7 +344,7 @@ var (
 )
 
 func BenchmarkMarshalKexInitMsg(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		Marshal(_kexInitMsg)
 	}
 }
@@ -275,7 +357,7 @@ func BenchmarkUnmarshalKexInitMsg(b *testing.B) {
 }
 
 func BenchmarkMarshalKexDHInitMsg(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		Marshal(_kexDHInitMsg)
 	}
 }
